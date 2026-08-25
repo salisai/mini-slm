@@ -14,7 +14,6 @@ before the attention dot product.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 from rope import RotaryEmbedding, apply_rope
 
@@ -25,6 +24,8 @@ class GroupedQueryAttention(nn.Module):
         d_model: int,
         n_heads: int,
         n_kv_heads: int,
+        layer_id: int, 
+        window_size: int = 512, 
         max_seq_len: int = 2048,
         rope_base: float = 10000.0,
     ):
@@ -46,6 +47,8 @@ class GroupedQueryAttention(nn.Module):
         self.n_kv_heads = n_kv_heads
         self.head_dim = d_model // n_heads
         self.n_rep = n_heads // n_kv_heads # number of query heads that will share a single KV head
+        self.window_size = window_size 
+        self.is_window = (layer_id % 4 != 0)
 
 
         self.q_proj = nn.Linear(d_model, n_heads * self.head_dim, bias=False)
@@ -88,17 +91,29 @@ class GroupedQueryAttention(nn.Module):
         k = self._repeat_kv(k)  # (batch, n_heads, seq_len, head_dim)
         v = self._repeat_kv(v)  # (batch, n_heads, seq_len, head_dim)
 
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        # scores shape: (batch, n_heads, seq_len, seq_len)
+        if causal_mask: 
+            future_mask = torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool).triu(diagonal=1)
 
-        if causal_mask:
-            mask = torch.triu(torch.full((seq_len, seq_len), float("-inf")), diagonal=1)
-            scores = scores + mask.to(scores.device)
+            if self.is_window: 
+                past_mask= torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool).tril(diagonal=-self.window_size)
+                forbidden_mask = future_mask | past_mask #block token outside this range
 
-        attn_weights = F.softmax(scores, dim=-1)
-        out = torch.matmul(attn_weights, v)
+            else: 
+                forbidden_mask = future_mask 
 
-        # merge heads back together and project to d_model
+            attn_mask = ~forbidden_mask
+            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
+        else: 
+            attn_mask = None 
+
+        # it can hand flashattention under the hood 
+        out = F.scaled_dot_product_attention(
+            q, k, v, 
+            attn_mask=attn_mask, 
+            dropout_p=0.0 if self.training else 0.0, 
+            is_causal=False
+        )
+
         out = out.transpose(1, 2).contiguous().view(batch, seq_len, self.n_heads * self.head_dim)
         return self.o_proj(out)
 
