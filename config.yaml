@@ -1,0 +1,35 @@
+model:
+  d_model: 384
+  n_layers: 6
+  n_heads: 6
+  n_kv_heads: 2
+  max_seq_len: 512
+
+tokenizer:
+  path: tokenizer/domain_tokenizer.json
+  vocab_size: 16000
+
+training:
+  data_path: data/cleaned_corpus.txt
+  batch_size: 8
+  learning_rate: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  max_steps: 5000
+  warmup_steps: 200
+  grad_clip: 1.0
+  eval_interval: 250
+  save_interval: 500
+  log_interval: 10
+  val_split: 0.01
+  checkpoint_dir: checkpoints
+  seed: 42
+  use_wandb: false
+  wandb_project: mini-slm
+
+generation:
+  checkpoint: checkpoints/latest.pt
+  max_new_tokens: 128
+  temperature: 0.8
+  top_k: 50
+  top_p: 0.9
